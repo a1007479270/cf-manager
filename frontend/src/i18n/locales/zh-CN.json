@@ -409,6 +409,10 @@
       "secretValuePlaceholder": "密钥值",
       "secretLabel": "机密",
       "plainLabel": "明文",
+      "jsonLabel": "JSON",
+      "jsonPlaceholder": "JSON 值，例如对象或数组",
+      "jsonRequired": "JSON 值不能为空",
+      "jsonInvalid": "JSON 格式错误：{error}",
       "add": "+ 添加变量"
     },
     "resources": {

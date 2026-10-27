@@ -3,6 +3,7 @@ import { getDeployHeaders } from './headers';
 import { computeStaticAssetHash, getContentType } from '../staticAssets';
 import { appLogger } from '../logger';
 import { proxyFetch } from '../proxyService';
+import { buildMultipartBody, type MultipartPart } from './uploadForm';
 
 const CF_BASE = 'https://api.cloudflare.com/client/v4';
 const MAX_RETRIES = 3;
@@ -91,7 +92,8 @@ export async function deployWorkerAssets(
   let completionJwt = sessionJwt;
   for (let bi = 0; bi < buckets.length; bi++) {
     const bucket = buckets[bi];
-    const upForm = new FormData();
+    // 手动构建 multipart：走代理时 node-fetch 无法序列化 FormData（CF 返回 415）
+    const upParts: MultipartPart[] = [];
     for (const hash of bucket) {
       const buf = hashToBuffer.get(hash);
       if (!buf) {
@@ -102,13 +104,14 @@ export async function deployWorkerAssets(
       // 用 octet-stream 会导致浏览器拒绝加载 JS 模块。
       const filePath = hashToPath.get(hash) || '';
       const ct = getContentType(filePath);
-      upForm.append(hash, new Blob([buf.toString('base64')], { type: ct }), hash);
+      upParts.push({ name: hash, value: buf.toString('base64'), filename: hash, contentType: ct });
     }
+    const { body: upBody, contentType: upContentType } = buildMultipartBody(upParts);
     const upResp = await withRetry(() =>
       proxyFetch(`${CF_BASE}/accounts/${accountId}/workers/assets/upload?base64=true`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${completionJwt}`, 'User-Agent': 'wrangler/4.112.0' },
-        body: upForm,
+        headers: { Authorization: `Bearer ${completionJwt}`, 'User-Agent': 'wrangler/4.112.0', 'Content-Type': upContentType },
+        body: upBody,
       }, 300000, undefined, account),
     );
     if (!upResp.ok) {

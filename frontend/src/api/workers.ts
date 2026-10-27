@@ -1,7 +1,9 @@
 import apiClient from './client';
 
 export interface DeployTarget { accountId: number; workerName: string }
-export interface DeployVarInput { name: string; value: string; secret: boolean; keep?: boolean }
+// 环境变量类型：明文 / 机密 / JSON（JSON 仅 Worker 支持，Pages 的 env_vars 无 json 类型）
+export type DeployVarType = 'plain_text' | 'secret_text' | 'json';
+export interface DeployVarInput { name: string; value: string; secret: boolean; keep?: boolean; type?: DeployVarType }
 export interface DeployBindingInput {
   type: 'kv' | 'd1' | 'r2' | 'ai' | 'durable_object' | 'service' | 'queue';
   name: string;
