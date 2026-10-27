@@ -1,7 +1,9 @@
 import { Account } from '../db/models';
 import { cfFetch } from './cfApi';
 
-export interface ManualVarInput { name: string; value: string; secret: boolean; keep?: boolean }
+// 环境变量类型：明文 / 机密 / JSON（对应 CF bindings 的 plain_text / secret_text / json）
+export type VarType = 'plain_text' | 'secret_text' | 'json';
+export interface ManualVarInput { name: string; value: string; secret: boolean; keep?: boolean; type?: VarType }
 export interface ManualBindingInput {
   type: 'kv' | 'd1' | 'r2' | 'ai' | 'durable_object' | 'service' | 'queue';
   name: string;
@@ -19,13 +21,48 @@ export function isValidBindingName(name: string): boolean {
   return /^[A-Za-z][A-Za-z0-9_]*$/.test(name);
 }
 
+// 兼容两种入参写法：显式 type 优先，其次由 secret 布尔推导（旧前端只传 secret）
+export function resolveVarType(v: { secret?: boolean; type?: string }): VarType {
+  if (v.type === 'json') return 'json';
+  if (v.type === 'secret_text' || v.secret) return 'secret_text';
+  return 'plain_text';
+}
+
+// JSON 变量的值在 UI 里以文本编辑，写入 CF 时必须转成真正的 JSON 值（对象/数组/数字/字符串…）
+export function parseJsonVarValue(name: string, raw: string): unknown {
+  const text = (raw ?? '').trim();
+  if (!text) throw new Error(`JSON 变量 ${name} 的值不能为空`);
+  try {
+    return JSON.parse(text);
+  } catch (e: any) {
+    throw new Error(`JSON 变量 ${name} 不是合法的 JSON：${e?.message || e}`);
+  }
+}
+
+// 规范化 JSON 文本：仅用于 diff 比较，忽略缩进 / 空行等格式差异
+export function normalizeJsonText(raw: string): string {
+  const text = (raw ?? '').trim();
+  if (!text) return '';
+  try {
+    return JSON.stringify(JSON.parse(text));
+  } catch {
+    return text;
+  }
+}
+
 export function varsToBindings(vars: ManualVarInput[]): Record<string, unknown>[] {
   const out: Record<string, unknown>[] = [];
   for (const v of vars || []) {
     if (!v.name || !isValidBindingName(v.name)) continue;
+    const type = resolveVarType(v);
     // keep 的 secret：不生成 binding（与 backend 对称，避免空值覆盖）
-    if (v.secret && v.keep) continue;
-    out.push(v.secret
+    if (type === 'secret_text' && v.keep) continue;
+    if (type === 'json') {
+      // CF 的 json binding 直接承载 JSON 值，而不是字符串
+      out.push({ type: 'json', name: v.name, json: parseJsonVarValue(v.name, v.value) });
+      continue;
+    }
+    out.push(type === 'secret_text'
       ? { type: 'secret_text', name: v.name, text: v.value }
       : { type: 'plain_text', name: v.name, text: v.value });
   }
@@ -108,11 +145,16 @@ export function buildPagesConfigsFromInput(vars: ManualVarInput[], resolved: Rec
   const prev: any = { compatibility_date: '2024-11-01' };
   for (const v of vars || []) {
     if (!v.name || !isValidBindingName(v.name)) continue;
+    const type = resolveVarType(v);
     // keep 的 secret 值不可读，跳过写入（与 varsToBindings 一致）
-    if (v.secret && v.keep) continue;
+    if (type === 'secret_text' && v.keep) continue;
     if (!prod.env_vars) { prod.env_vars = {}; prev.env_vars = {}; }
-    prod.env_vars[v.name] = { value: v.value, type: v.secret ? 'secret_text' : 'plain_text' };
-    prev.env_vars[v.name] = { value: v.value, type: v.secret ? 'secret_text' : 'plain_text' };
+    // Pages 的 env_vars 只接受 plain_text / secret_text：JSON 变量以紧凑序列化字符串写入，
+    // Functions 里读到的是字符串，需自行 JSON.parse（Worker 端才是原生 json binding）。
+    const value = type === 'json' ? JSON.stringify(parseJsonVarValue(v.name, v.value)) : v.value;
+    const cfType = type === 'secret_text' ? 'secret_text' : 'plain_text';
+    prod.env_vars[v.name] = { value, type: cfType };
+    prev.env_vars[v.name] = { value, type: cfType };
   }
   for (const b of resolved as Array<Record<string, any>>) {
     if (b.type === 'kv_namespace') { if (!prod.kv_namespaces) { prod.kv_namespaces = {}; prev.kv_namespaces = {}; } prod.kv_namespaces[b.name] = { namespace_id: (b as any).namespace_id }; prev.kv_namespaces[b.name] = { namespace_id: (b as any).namespace_id }; }

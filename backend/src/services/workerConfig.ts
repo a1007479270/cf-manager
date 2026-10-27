@@ -1,7 +1,8 @@
 import { Account } from '../models/account';
 import { getCfClient, getAuthHeaders } from './cfFactory';
 import { proxyFetch } from './proxyService';
-import type { ManualVarInput } from './bindings';
+import { resolveVarType, normalizeJsonText } from './bindings';
+import type { ManualVarInput, VarType } from './bindings';
 import { getScriptContent, deployWorker, updateSecret, deleteSecret } from './workerService';
 
 const CF_BASE = 'https://api.cloudflare.com/client/v4';
@@ -18,8 +19,16 @@ export interface WorkerConfigBinding {
   queueName?: string;
 }
 
+export interface WorkerConfigVar {
+  name: string;
+  value: string | null;
+  secret: boolean;
+  // 变量类型：plain_text / secret_text / json（JSON 值以格式化文本回显，便于直接编辑）
+  type: VarType;
+}
+
 export interface WorkerConfigResult {
-  vars: Array<{ name: string; value: string | null; secret: boolean }>;
+  vars: WorkerConfigVar[];
   bindings: WorkerConfigBinding[];
 }
 
@@ -28,12 +37,14 @@ export async function getWorkerConfig(account: Account, name: string): Promise<W
   const resp = await proxyFetch(`${CF_BASE}/accounts/${account.account_id}/workers/scripts/${name}`, { headers: authHeaders }, 30000, undefined, account);
   const buf = Buffer.from(await resp.arrayBuffer());
   const contentType = (resp.headers.get('content-type') || '') as string;
-  const vars: Array<{ name: string; value: string | null; secret: boolean }> = [];
+  const vars: WorkerConfigVar[] = [];
   const bindings: WorkerConfigBinding[] = [];
 
   const mapBinding = (b: any) => {
-    if (b.type === 'plain_text') vars.push({ name: b.name, value: b.text ?? '', secret: false });
-    else if (b.type === 'secret_text') vars.push({ name: b.name, value: null, secret: true });
+    if (b.type === 'plain_text') vars.push({ name: b.name, value: b.text ?? '', secret: false, type: 'plain_text' });
+    else if (b.type === 'secret_text') vars.push({ name: b.name, value: null, secret: true, type: 'secret_text' });
+    // CF 的 json binding 把值放在 json 字段里（对象/数组/数字…），回显为格式化文本供编辑
+    else if (b.type === 'json') vars.push({ name: b.name, value: JSON.stringify(b.json ?? null, null, 2), secret: false, type: 'json' });
     else {
       // 归一化为前端意图类型，并保留高级绑定的参数字段供重部署预填回填
       const intentType =
@@ -107,11 +118,11 @@ export async function getPagesConfig(account: Account, name: string): Promise<Wo
   const cf = getCfClient(account);
   const project = await cf.pages.projects.get(name, { account_id: account.account_id! });
   const cfg = project?.deployment_configs?.production || {};
-  const vars: Array<{ name: string; value: string | null; secret: boolean }> = [];
+  const vars: WorkerConfigVar[] = [];
   const bindings: WorkerConfigBinding[] = [];
   for (const [k, v] of Object.entries<any>(cfg.env_vars || {})) {
     const isSecret = v?.type === 'secret_text';
-    vars.push({ name: k, value: isSecret ? null : (v?.value ?? ''), secret: isSecret });
+    vars.push({ name: k, value: isSecret ? null : (v?.value ?? ''), secret: isSecret, type: isSecret ? 'secret_text' : 'plain_text' });
   }
   for (const [name, v] of Object.entries<any>(cfg.kv_namespaces || {})) bindings.push({ type: 'kv', name, resourceName: v?.namespace_id, mode: 'existing' });
   for (const [name, v] of Object.entries<any>(cfg.d1_databases || {})) bindings.push({ type: 'd1', name, resourceName: v?.id, mode: 'existing' });
@@ -129,10 +140,22 @@ export async function applyWorkerConfigDiff(
   opts: { vars: ManualVarInput[]; bindings: Record<string, unknown>[]; scriptContent?: string; packageZip?: Buffer; mainModule?: string },
 ): Promise<void> {
   const current = await getWorkerConfig(account, name);
-  const currentPlain = new Map(current.vars.filter(v => !v.secret).map(v => [v.name, v.value || '']));
-  const currentSecretNames = new Set(current.vars.filter(v => v.secret).map(v => v.name));
-  const targetPlain = new Map((opts.vars || []).filter(v => !v.secret && !v.keep).map(v => [v.name, v.value || '']));
-  const targetSecretNames = new Set((opts.vars || []).filter(v => v.secret).map(v => v.name));
+  // 非 secret 变量（明文 / JSON）指纹：类型与规范化值都比，JSON 忽略缩进差异
+  const varsFingerprint = (vars: Array<{ name: string; value?: string | null; secret?: boolean; type?: string }>) => {
+    const out = new Map<string, string>();
+    for (const v of vars || []) {
+      const type = resolveVarType(v);
+      if (type === 'secret_text' || !v.name) continue;
+      out.set(v.name, `${type}|${type === 'json' ? normalizeJsonText(v.value || '') : (v.value || '')}`);
+    }
+    return out;
+  };
+  const secretNames = (vars: Array<{ name: string; secret?: boolean; type?: string }>) =>
+    new Set((vars || []).filter(v => resolveVarType(v) === 'secret_text').map(v => v.name));
+  const currentPlain = varsFingerprint(current.vars);
+  const currentSecretNames = secretNames(current.vars);
+  const targetPlain = varsFingerprint(opts.vars || []);
+  const targetSecretNames = secretNames(opts.vars || []);
 
   const plainChanged = targetPlain.size !== currentPlain.size
     || [...targetPlain.entries()].some(([k, val]) => currentPlain.get(k) !== val);
@@ -145,7 +168,7 @@ export async function applyWorkerConfigDiff(
     type === 'r2_bucket' ? 'r2' : type;
   const bindingFingerprint = (arr: any[]) => JSON.stringify((arr || []).filter((b: any) => b.type !== 'secret_text').map((b: any) => `${toIntentType(b.type)}:${b.name}`).sort());
   const bindingsChanged = bindingFingerprint(opts.bindings) !== bindingFingerprint(current.bindings);
-  console.log(`[DBG] applyWorkerConfigDiff name=${name} vars=${JSON.stringify((opts.vars || []).map((v: any) => `${v.name}:${v.secret ? 'S' : 'P'}${v.keep ? '(keep)' : ''}`))} plainChanged=${plainChanged} bindingsChanged=${bindingsChanged}`);
+  console.log(`[DBG] applyWorkerConfigDiff name=${name} vars=${JSON.stringify((opts.vars || []).map((v: any) => `${v.name}:${resolveVarType(v)}${v.keep ? '(keep)' : ''}`))} plainChanged=${plainChanged} bindingsChanged=${bindingsChanged}`);
 
   // 删除：现有 secret 不在目标集合
   for (const s of currentSecretNames) {
@@ -172,7 +195,7 @@ export async function applyWorkerConfigDiff(
 
   // 新增/更新 secrets（keep=true 或值为空则跳过）
   for (const v of opts.vars || []) {
-    if (!v.secret || !v.name || v.keep) continue;
+    if (resolveVarType(v) !== 'secret_text' || !v.name || v.keep) continue;
     if (v.value) await updateSecret(account, name, v.name, 'secret_text', v.value);
   }
 }

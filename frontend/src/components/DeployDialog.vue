@@ -47,7 +47,7 @@
       <!-- tab 配置区 -->
       <n-tabs type="line" :value="activeTab" @update:value="activeTab = $event">
         <n-tab-pane name="vars" :tab="t('workers.deployDialog.tabVars')">
-          <DeployEnvVarsTab v-model="vars" />
+          <DeployEnvVarsTab v-model="vars" :allow-json="deployType === 'worker'" />
         </n-tab-pane>
         <n-tab-pane name="kv" :tab="t('workers.deployDialog.tabKv')">
           <DeployResourceTab v-model="kvRows" resource-type="kv" :account-ids="targetAccountIds" />
@@ -153,7 +153,14 @@ async function loadConfigForRedeploy() {
     const { data } = props.redeploy?.type === 'pages'
       ? await workersApi.getPagesConfig(acc, n)
       : await workersApi.getWorkerConfig(acc, n);
-    vars.value = (data.vars || []).map((v: any) => ({ name: v.name, value: v.value ?? '', secret: v.secret, keep: v.secret && !v.value }));
+    vars.value = (data.vars || []).map((v: any) => ({
+      name: v.name,
+      value: v.value ?? '',
+      secret: v.secret,
+      // 保留变量类型（JSON 变量回显的是格式化后的 JSON 文本）
+      type: v.type || (v.secret ? 'secret_text' : 'plain_text'),
+      keep: v.secret && !v.value,
+    }));
     kvRows.value = (data.bindings || []).filter((b: any) => b.type === 'kv' || b.type === 'kv_namespace').map((b: any) => ({ type: 'kv', name: b.name, mode: b.resourceName ? 'existing' : 'auto', existingId: b.resourceName }));
     d1Rows.value = (data.bindings || []).filter((b: any) => b.type === 'd1').map((b: any) => ({ type: 'd1', name: b.name, mode: b.resourceName ? 'existing' : 'auto', existingId: b.resourceName }));
     r2Rows.value = (data.bindings || []).filter((b: any) => b.type === 'r2' || b.type === 'r2_bucket').map((b: any) => ({ type: 'r2', name: b.name, mode: b.resourceName ? 'existing' : 'auto', existingId: b.resourceName }));
@@ -253,5 +260,13 @@ watch(() => props.show, (s) => {
 });
 
 // Pages 仅支持 zip 代码源：切换到 Pages 时若处于 URL 模式则恢复为文件模式
-watch(deployType, (t) => { if (t === 'pages' && source.value === 'url') source.value = 'file'; });
+watch(deployType, (val) => {
+  if (val === 'pages' && source.value === 'url') source.value = 'file';
+  // Pages 的 env_vars 只有明文/机密两种类型：切到 Pages 时把 JSON 变量降级为明文（JSON 文本）
+  if (val === 'pages') {
+    for (const r of vars.value) {
+      if (r.type === 'json') { r.type = 'plain_text'; r.secret = false; }
+    }
+  }
+});
 </script>

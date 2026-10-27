@@ -409,6 +409,10 @@
       "secretValuePlaceholder": "Secret value",
       "secretLabel": "Secret",
       "plainLabel": "Plain",
+      "jsonLabel": "JSON",
+      "jsonPlaceholder": "JSON value, e.g. an object or array",
+      "jsonRequired": "JSON value is required",
+      "jsonInvalid": "Invalid JSON: {error}",
       "add": "+ Add variable"
     },
     "resources": {

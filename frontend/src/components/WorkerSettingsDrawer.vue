@@ -210,7 +210,16 @@
         <n-select v-model:value="secretForm.type" :options="typeOptions" :disabled="secretEditing" />
       </n-form-item>
       <n-form-item :label="t('workerSettings.varValueLabel')">
-        <n-input v-model:value="secretForm.value" :type="secretForm.type === 'secret_text' ? 'password' : 'text'" show-password-on="click" :placeholder="t('workerSettings.varValuePlaceholder')" />
+        <n-space vertical :size="4" style="width: 100%">
+          <n-input
+            v-model:value="secretForm.value"
+            :type="secretForm.type === 'secret_text' ? 'password' : 'text'"
+            :autosize="secretForm.type === 'json' ? { minRows: 4, maxRows: 12 } : undefined"
+            show-password-on="click"
+            :placeholder="secretForm.type === 'json' ? t('workers.envVars.jsonPlaceholder') : t('workerSettings.varValuePlaceholder')"
+          />
+          <n-text v-if="jsonValueError" type="error" style="font-size: 12px">{{ jsonValueError }}</n-text>
+        </n-space>
       </n-form-item>
     </n-form>
     <template #action>
@@ -503,7 +512,7 @@ const syncResults = ref<any[]>([]);
 async function loadSecrets() {
   secretsLoading.value = true;
   try {
-    // 合并显示所有环境变量：明文（getWorkerConfig）+ 机密（config vars + secrets API 补充）
+    // 合并显示所有环境变量：明文 / JSON（getWorkerConfig）+ 机密（config vars + secrets API 补充）
     const [cfg, sec] = await Promise.all([
       workersApi.getWorkerConfig(accountId.value, workerName.value),
       workersApi.getSecrets(accountId.value, workerName.value),
@@ -511,7 +520,7 @@ async function loadSecrets() {
     const cfgVars = (cfg?.data?.vars || []) as any[];
     const secList = (Array.isArray(sec?.data) ? sec.data : []) as any[];
     const merged: any[] = [
-      ...cfgVars.map((v: any) => ({ name: v.name, type: v.secret ? 'secret_text' : 'plain_text', value: v.value ?? '' })),
+      ...cfgVars.map((v: any) => ({ name: v.name, type: v.type || (v.secret ? 'secret_text' : 'plain_text'), value: v.value ?? '' })),
       ...secList.filter((s: any) => !cfgVars.some((v: any) => v.name === s.name)).map((s: any) => ({ name: s.name, type: 'secret_text', value: '' })),
     ];
     secrets.value = merged;
@@ -519,34 +528,65 @@ async function loadSecrets() {
   finally { secretsLoading.value = false; }
 }
 
-// 统一 type 选择：明文 / 机密
+// 统一 type 选择：明文 / 机密 / JSON
 const typeOptions = computed(() => [
   { label: t('workers.envVars.plainLabel'), value: 'plain_text' },
   { label: t('workerSettings.secretTextLabel'), value: 'secret_text' },
+  { label: t('workers.envVars.jsonLabel'), value: 'json' },
 ]);
+
+// JSON 变量实时校验（仅 json 类型时展示）
+const jsonValueError = computed(() => {
+  if (secretForm.value.type !== 'json') return '';
+  const text = (secretForm.value.value || '').trim();
+  if (!text) return t('workers.envVars.jsonRequired');
+  try {
+    JSON.parse(text);
+    return '';
+  } catch (e: any) {
+    return t('workers.envVars.jsonInvalid', { error: e?.message || '' });
+  }
+});
+
+function varTypeOf(row: any): 'plain_text' | 'secret_text' | 'json' {
+  if (row?.type === 'json') return 'json';
+  if (row?.type === 'secret_text' || row?.secret) return 'secret_text';
+  return 'plain_text';
+}
 
 function openVarModal(row?: any) {
   secretEditing.value = !!row;
+  const type = row ? varTypeOf(row) : 'plain_text';
   secretForm.value = row
-    ? { name: row.name, value: '', type: row.type || 'plain_text' }
+    // 机密值不可读，留空保持原值；明文 / JSON 直接带出当前值便于编辑
+    ? { name: row.name, value: type === 'secret_text' ? '' : (row.value ?? ''), type }
     : { name: '', value: '', type: 'plain_text' };
   showSecretModal.value = true;
 }
 
-// 保存变量：明文走 batchDeploy 重部署（同时保留机密 keep=true），机密走 updateSecret
+// 把当前全部变量转换成重部署入参（机密置 keep，避免空值覆盖现有 secret）
+function toRedeployVars(currentVars: any[], excludeName: string) {
+  return currentVars
+    .filter((v: any) => v.name !== excludeName)
+    .map((v: any) => {
+      const type = varTypeOf(v);
+      return { name: v.name, value: '', secret: type === 'secret_text', type, keep: type === 'secret_text' };
+    });
+}
+
+// 保存变量：明文 / JSON 走 batchDeploy 重部署（同时保留机密 keep=true），机密走 updateSecret
 async function handleSaveVar() {
   const form = secretForm.value;
   if (!form.name) { message.warning(t('workerSettings.msg.nameRequired')); return; }
+  if (form.type === 'json' && jsonValueError.value) { message.warning(jsonValueError.value); return; }
   secretSaving.value = true;
   try {
-    if (form.type === 'plain_text') {
-      // 明文：收集当前所有 vars（机密 keep=true），替换/添加该 name 的明文，batchDeploy 重部署
+    if (form.type !== 'secret_text') {
+      // 非机密：收集当前所有 vars（机密 keep=true），替换/添加该 name，batchDeploy 重部署
       const cfg = await workersApi.getWorkerConfig(accountId.value, workerName.value);
       const currentVars = (cfg?.data?.vars || []) as any[];
-      const nextVars = currentVars
-        .filter((v: any) => v.name !== form.name)
-        .map((v: any) => ({ name: v.name, value: '', secret: !!v.secret, keep: !!v.secret }));
-      nextVars.push({ name: form.name, value: form.value, secret: false, keep: false });
+      const nextVars: any[] = toRedeployVars(currentVars, form.name);
+      nextVars.push({ name: form.name, value: form.value, secret: false, type: form.type, keep: false });
       await workersApi.batchDeploy(
         [{ accountId: accountId.value, workerName: workerName.value }],
         { isRedeploy: true, vars: nextVars },
@@ -563,16 +603,14 @@ async function handleSaveVar() {
   } finally { secretSaving.value = false; }
 }
 
-// 删除变量：明文走 batchDeploy 移除（机密 keep），机密走 deleteSecret
+// 删除变量：非机密走 batchDeploy 移除（机密 keep），机密走 deleteSecret
 async function handleDeleteVar(row: any) {
   secretSaving.value = true;
   try {
-    if (row.type === 'plain_text') {
+    if (varTypeOf(row) !== 'secret_text') {
       const cfg = await workersApi.getWorkerConfig(accountId.value, workerName.value);
       const currentVars = (cfg?.data?.vars || []) as any[];
-      const nextVars = currentVars
-        .filter((v: any) => v.name !== row.name)
-        .map((v: any) => ({ name: v.name, value: '', secret: !!v.secret, keep: !!v.secret }));
+      const nextVars = toRedeployVars(currentVars, row.name);
       await workersApi.batchDeploy(
         [{ accountId: accountId.value, workerName: workerName.value }],
         { isRedeploy: true, vars: nextVars },
@@ -791,8 +829,26 @@ async function handleEnvSync() {
 // Columns
 const secretColumns = computed<DataTableColumns<any>>(() => [
   { title: t('workerSettings.secretName'), key: 'name', minWidth: 100 },
-  { title: t('workerSettings.secretType'), key: 'type', width: 100, render: (row) => h(NTag, { size: 'small', type: row.type === 'secret_text' ? 'warning' : 'info', bordered: false }, { default: () => row.type === 'secret_text' ? t('workers.envVars.secretLabel') : t('workers.envVars.plainLabel') }) },
-  { title: t('workerSettings.varValueLabel'), key: 'value', minWidth: 160, render: (row) => row.type === 'secret_text' ? h('span', { style: 'color:#999' }, '******') : (row.value || h('span', { style: 'color:#999' }, '—')) },
+  {
+    title: t('workerSettings.secretType'), key: 'type', width: 100,
+    render: (row) => {
+      const type = varTypeOf(row);
+      const label = type === 'secret_text'
+        ? t('workers.envVars.secretLabel')
+        : type === 'json' ? t('workers.envVars.jsonLabel') : t('workers.envVars.plainLabel');
+      const tagType = type === 'secret_text' ? 'warning' : type === 'json' ? 'success' : 'info';
+      return h(NTag, { size: 'small', type: tagType as any, bordered: false }, { default: () => label });
+    },
+  },
+  {
+    title: t('workerSettings.varValueLabel'), key: 'value', minWidth: 160,
+    render: (row) => {
+      if (varTypeOf(row) === 'secret_text') return h('span', { style: 'color:#999' }, '******');
+      if (!row.value) return h('span', { style: 'color:#999' }, '—');
+      // JSON 值可能跨多行，表格内压成单行显示
+      return h('span', { style: 'display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap' }, String(row.value).replace(/\s+/g, ' ').trim());
+    },
+  },
   { title: t('common.actions'), key: 'actions', width: 150, render: (row) => h(NSpace, { size: 4 }, {
     default: () => [
       h(NButton, { size: 'tiny', onClick: () => openVarModal(row) }, { default: () => t('common.edit') }),
