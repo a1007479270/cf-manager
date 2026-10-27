@@ -35,7 +35,7 @@ export function parseJsonVarValue(name: string, raw: string): unknown {
   try {
     return JSON.parse(text);
   } catch (e: any) {
-    throw new Error(`JSON 变量 ${name} 不是合法的 JSON：${e?.message || e}`);
+    throw new Error(`JSON 变量 ${name} 不是合法的 JSON：${e?.message || e}`, { cause: e });
   }
 }
 
