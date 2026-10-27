@@ -50,84 +50,87 @@
             </n-button>
           </template>
 
-          <n-spin :show="dnsStore.loading" style="flex: 1 1 0%; min-height: 0; display: flex; flex-direction: column;">
-            <!-- 所有账户模式：分组折叠 -->
-            <template v-if="selectedAccount === '__all__'">
-              <n-collapse v-if="groupedDomains.length > 0" :default-expanded-names="expandedGroups">
-                <n-collapse-item
-                  v-for="group in groupedDomains"
-                  :key="group.accountName"
-                  :name="group.accountName"
-                >
-                  <template #header>
-                    <n-space align="center" :size="4">
-                      <span>{{ group.accountName }}</span>
-                      <n-text depth="3" style="font-size: 12px">({{ group.domains.length }})</n-text>
-                    </n-space>
-                  </template>
-                  <n-list hoverable clickable>
-                    <n-list-item
-                      v-for="d in group.domains"
-                      :key="d.name"
-                      @click="selectDomain(d.name)"
-                      :style="{ background: dnsStore.currentDomain === d.name ? 'var(--n-color-hover)' : '' }"
-                    >
-                      <div style="display: flex; align-items: flex-start; gap: 8px; width: 100%">
-                        <n-checkbox
-                          v-if="!isDemoDomain(d)"
-                          :checked="selectedDomains.has(d.name)"
-                          @update:checked="(v: boolean) => toggleDomainSelect(d.name, v)"
-                          @click.stop
-                        />
-                        <div style="flex: 1; min-width: 0">
-                          <div style="font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{ d.name }}</div>
-                          <n-space align="center" :size="4" style="margin-top: 2px">
-                            <span :style="{ color: statusColor(d.status), fontSize: '11px' }">●</span>
-                            <n-text depth="3" style="font-size: 11px">{{ statusLabel(d.status) }}</n-text>
-                            <n-text depth="3" style="font-size: 11px">· {{ d.accountName }}</n-text>
-                          </n-space>
-                        </div>
-                      </div>
-                    </n-list-item>
-                  </n-list>
-                </n-collapse-item>
-              </n-collapse>
-            </template>
-
-            <!-- 单账户模式：平铺列表 -->
-            <template v-else>
-              <n-list v-if="filteredDomains.length > 0" hoverable clickable>
-                <n-list-item
-                  v-for="d in filteredDomains"
-                  :key="d.name"
-                  @click="selectDomain(d.name)"
-                  :style="{ background: dnsStore.currentDomain === d.name ? 'var(--n-color-hover)' : '' }"
-                >
-                  <div style="display: flex; align-items: flex-start; gap: 8px; width: 100%">
-                    <n-checkbox
-                      v-if="!isDemoDomain(d)"
-                      :checked="selectedDomains.has(d.name)"
-                      @update:checked="(v: boolean) => toggleDomainSelect(d.name, v)"
-                      @click.stop
-                    />
-                    <div style="flex: 1; min-width: 0">
-                      <div style="font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{ d.name }}</div>
-                      <n-space align="center" :size="4" style="margin-top: 2px">
-                        <span :style="{ color: statusColor(d.status), fontSize: '11px' }">●</span>
-                        <n-text depth="3" style="font-size: 11px">{{ statusLabel(d.status) }}</n-text>
+          <!-- 域名列表滚动容器：n-spin 的包裹层需参与 flex 链，否则内容溢出后无法滚动 -->
+          <div class="dns-list-scroll">
+            <n-spin :show="dnsStore.loading">
+              <!-- 所有账户模式：分组折叠 -->
+              <template v-if="selectedAccount === '__all__'">
+                <n-collapse v-if="groupedDomains.length > 0" :default-expanded-names="expandedGroups">
+                  <n-collapse-item
+                    v-for="group in groupedDomains"
+                    :key="group.accountName"
+                    :name="group.accountName"
+                  >
+                    <template #header>
+                      <n-space align="center" :size="4">
+                        <span>{{ group.accountName }}</span>
+                        <n-text depth="3" style="font-size: 12px">({{ group.domains.length }})</n-text>
                       </n-space>
-                    </div>
-                  </div>
-                </n-list-item>
-              </n-list>
-            </template>
-
-            <n-empty v-if="!dnsStore.loading && filteredDomains.length === 0" :description="t('dns.noDomain')" style="margin: 20px 0">
-              <template #extra>
-                <n-button size="small" type="primary" @click="showAddDomainModal = true">{{ t('dns.addDomainBtn') }}</n-button>
+                    </template>
+                    <n-list hoverable clickable>
+                      <n-list-item
+                        v-for="d in group.domains"
+                        :key="d.name"
+                        @click="selectDomain(d.name)"
+                        :style="{ background: dnsStore.currentDomain === d.name ? 'var(--n-color-hover)' : '' }"
+                      >
+                        <div style="display: flex; align-items: flex-start; gap: 8px; width: 100%">
+                          <n-checkbox
+                            v-if="!isDemoDomain(d)"
+                            :checked="selectedDomains.has(d.name)"
+                            @update:checked="(v: boolean) => toggleDomainSelect(d.name, v)"
+                            @click.stop
+                          />
+                          <div style="flex: 1; min-width: 0">
+                            <div style="font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{ d.name }}</div>
+                            <n-space align="center" :size="4" style="margin-top: 2px">
+                              <span :style="{ color: statusColor(d.status), fontSize: '11px' }">●</span>
+                              <n-text depth="3" style="font-size: 11px">{{ statusLabel(d.status) }}</n-text>
+                              <n-text depth="3" style="font-size: 11px">· {{ d.accountName }}</n-text>
+                            </n-space>
+                          </div>
+                        </div>
+                      </n-list-item>
+                    </n-list>
+                  </n-collapse-item>
+                </n-collapse>
               </template>
-            </n-empty>
-          </n-spin>
+
+              <!-- 单账户模式：平铺列表 -->
+              <template v-else>
+                <n-list v-if="filteredDomains.length > 0" hoverable clickable>
+                  <n-list-item
+                    v-for="d in filteredDomains"
+                    :key="d.name"
+                    @click="selectDomain(d.name)"
+                    :style="{ background: dnsStore.currentDomain === d.name ? 'var(--n-color-hover)' : '' }"
+                  >
+                    <div style="display: flex; align-items: flex-start; gap: 8px; width: 100%">
+                      <n-checkbox
+                        v-if="!isDemoDomain(d)"
+                        :checked="selectedDomains.has(d.name)"
+                        @update:checked="(v: boolean) => toggleDomainSelect(d.name, v)"
+                        @click.stop
+                      />
+                      <div style="flex: 1; min-width: 0">
+                        <div style="font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{ d.name }}</div>
+                        <n-space align="center" :size="4" style="margin-top: 2px">
+                          <span :style="{ color: statusColor(d.status), fontSize: '11px' }">●</span>
+                          <n-text depth="3" style="font-size: 11px">{{ statusLabel(d.status) }}</n-text>
+                        </n-space>
+                      </div>
+                    </div>
+                  </n-list-item>
+                </n-list>
+              </template>
+
+              <n-empty v-if="!dnsStore.loading && filteredDomains.length === 0" :description="t('dns.noDomain')" style="margin: 20px 0">
+                <template #extra>
+                  <n-button size="small" type="primary" @click="showAddDomainModal = true">{{ t('dns.addDomainBtn') }}</n-button>
+                </template>
+              </n-empty>
+            </n-spin>
+          </div>
         </n-card>
       </n-gi>
 
@@ -957,8 +960,10 @@ onMounted(async () => {
   flex: 1 1 0%;
   min-height: 0;
   height: 100% !important;
-  grid-template-rows: 1fr !important;
+  /* minmax(0, 1fr)：行高严格受容器约束，避免列表内容把行撑高、撑出视口后被裁掉 */
+  grid-template-rows: minmax(0, 1fr) !important;
   box-sizing: border-box;
+  overflow: hidden;
 }
 
 .dns-grid-col {
@@ -970,6 +975,7 @@ onMounted(async () => {
 
 .dns-left-card {
   height: 100%;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -980,7 +986,31 @@ onMounted(async () => {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  /* 滚动交给内层 .dns-list-scroll，避免滚动区域与外层高度链打架 */
+  overflow: hidden;
+}
+
+.dns-list-scroll {
+  flex: 1 1 0%;
+  min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* n-spin 的包裹层要参与 flex 链，否则列表内容会溢出卡片且滚不动（issue #66） */
+.dns-list-scroll :deep(.n-spin-container) {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.dns-list-scroll :deep(.n-spin-content) {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .dns-right-card {
@@ -1078,5 +1108,41 @@ onMounted(async () => {
   border: 1px solid var(--glass-border);
   border-radius: 10px;
   box-shadow: var(--glass-shadow);
+}
+
+/* 窄屏（< m 断点 640px）左右两列改为上下堆叠：此时不再固定整页高度，
+   左侧域名列表随内容展开、由页面统一滚动，避免多账号分组被压在半屏内滚不动（issue #66） */
+@media (max-width: 640px) {
+  .dns-grid-container {
+    flex: 0 0 auto;
+    height: auto !important;
+    grid-template-rows: auto auto !important;
+    overflow: visible;
+  }
+
+  .dns-grid-col {
+    height: auto;
+  }
+
+  .dns-left-card {
+    height: auto;
+    overflow: visible;
+  }
+
+  .dns-left-card :deep(.n-card__content) {
+    flex: 0 0 auto;
+    overflow: visible;
+  }
+
+  .dns-list-scroll {
+    flex: 0 0 auto;
+    overflow: visible;
+  }
+
+  /* 右侧详情仍需确定高度，内部表格/设置表单才有滚动区 */
+  .dns-right-card {
+    height: 70vh;
+    min-height: 420px;
+  }
 }
 </style>

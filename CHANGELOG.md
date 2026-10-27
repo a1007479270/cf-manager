@@ -1,5 +1,24 @@
 # Changelog
 
+## [2.4.3] - 2026-10-27
+
+### ✨ 新功能
+
+- **Worker 环境变量支持 JSON 类型（closes #65）**：变量类型由「明文 / 机密」扩展为「明文 / 机密 / JSON」。
+  - 写入侧生成 Cloudflare 原生 `json` binding（`{ type: 'json', name, json: <解析后的值> }`），运行时 `env.X` 直接是对象 / 数组 / 数字，**不是** JSON 字符串；读取侧从 `binding.json` 取值并以缩进格式化回显，便于直接编辑。
+  - Worker 设置抽屉与部署对话框的变量行均新增类型下拉：JSON 用多行输入框，带实时校验（为空或格式错误时红字提示并阻止保存）；变量列表类型列区分明文 / 机密 / JSON 三态，JSON 值压缩为单行显示；编辑时带出当前值而非留空。
+  - 重部署 diff 指纹改为「类型 + 规范化值」比较，JSON 值忽略缩进 / 空白差异，仅格式不同的编辑不再触发无意义的重部署；类型变化（明文 ↔ JSON）会被正确识别。
+  - Pages 的 `env_vars` 只有 `plain_text / secret_text`（Cloudflare API 未定义 json 类型），因此 Pages 项目不提供 JSON 选项，切到 Pages 时已有 JSON 行自动降级为明文（序列化后的 JSON 文本，Functions 侧需自行 `JSON.parse`）。
+  - backend 与 worker 双端对称实现（`bindings.ts` / `workerConfig.ts`），并补齐中英文文案（`workers.envVars.jsonLabel / jsonPlaceholder / jsonRequired / jsonInvalid`）。
+- 无数据库变更，无需迁移。
+
+### 🐞 修复与优化
+
+- **DNS 管理页无法向下滚动（closes #66）**：左侧域名列表的滚动链断裂——`n-spin` 的 `.n-spin-container / .n-spin-content` 未参与 flex 高度链，列表内容溢出后被卡片 `overflow: hidden` 裁掉且没有滚动容器承接；同时网格行用 `1fr`（最小值为 `auto`）会被内容撑高，导致卡片内高度与内容高度错位。
+  - 列表外包一层 `.dns-list-scroll` 作为显式滚动容器（`flex: 1 1 0%` + `min-height: 0` + `overflow-y: auto`），并让 n-spin 的两层包裹元素参与 flex 链；卡片内容区改为 `overflow: hidden`，滚动只由内层负责，避免双层高度链互相打架。
+  - 网格行高改为 `minmax(0, 1fr)` 并对容器裁切，行高严格受视口约束，不再被展开的账号分组撑出屏幕。
+  - 窄屏（≤ 640px，与 `n-grid` 的 `m` 断点对齐）两列改为上下堆叠时不再固定整页高度：左侧列表随内容展开、由 `.page-view` 统一滚动，右侧详情保留 `70vh` 定高以维持表格与设置表单的内部滚动。
+
 ## [2.4.2] - 2026-10-14
 
 ### 🔧 CI
